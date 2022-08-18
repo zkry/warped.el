@@ -3,7 +3,7 @@
 ;; Author: Zachary Romero
 ;; Maintainer: Zachary Romero
 ;; Version: 0.1.0
-;; Package-Requires: ()
+;; Package-Requires: ((emacs "25.1"))
 ;; Homepage: https://github.com/zkry/warped.el
 ;; Keywords: keywords
 
@@ -36,6 +36,10 @@
   "Root directory to search for workspaces in."
   :type 'string)
 
+(defconst warped-error-buffer-name "*warped-errors*")
+
+(defvar warped-spec-cache nil)
+
 (setq warped-workspace-root "/Users/zromero/dev/emacs/Workflows/specs")
 
 (defun warped--workspace-files (&optional directory)
@@ -55,7 +59,101 @@
           (setq result (append result children-ress)))))
     result))
 
-(defun warped--workspace-list-tags ())
+(defun warped--build-cache ()
+  "Cache the parsed contents of workspace files."
+  (setq warped-spec-cache (make-hash-table :test #'equal))
+  (let ((files (warped--workspace-files)))
+    (dolist (file files)
+      (let ((file-contents))
+        (with-temp-buffer
+          (condition-case err
+              (progn
+                (insert-file-contents file)
+                (setq file-contents (yaml-parse-string (buffer-string))))
+              (error
+               (with-current-buffer warped-error-buffer-name
+                 (goto-char (point-max))
+                 (insert "\nUnable to parse file: " file)))))
+        (puthash (gethash 'name file-contents) file-contents warped-spec-cache)))))
+
+(defun warped--actions-from-tag (tag)
+  "Return a list of all actions for a given TAG."
+  (let ((actions '()))
+    (maphash (lambda (name ht)
+               (let ((tags (gethash 'tags ht [])))
+                 (when (seq-contains tags tag #'equal)
+                   (push name actions))))
+             warped-spec-cache)
+    (nreverse actions)))
+
+(defun warped--workspace-list-tags ()
+  "Return a list of all defined tags."
+  (let ((tags '()))
+    (maphash (lambda (_ ht)
+              (setq tags (append tags (seq-into (gethash 'tags ht '()) 'list))))
+             warped-spec-cache)
+    (delete-duplicates tags :test #'string-equal)
+    tags))
+
+(defun warped--generate-info-string (action &optional selected-arg)
+  "Generate info string for ACTION.
+
+If provided, SELECTED-ARG is the index of the argument being edited."
+  (let* ((template-data (gethash action warped-spec-cache))
+         (command (gethash 'command template-data))
+         (description (gethash 'description template-data))
+         (arguments (gethash 'arguments template-data))
+         (source-url (gethash 'source_url template-data))
+         (selected-arg-name))
+    (when selected-arg
+      (setq selected-arg-name (gethash 'name (aref arguments selected-arg))))
+    (with-temp-buffer
+      (insert "\n\n")
+      (insert action "\n")
+      (insert "\n")
+      (insert "    " command "\n")
+      (insert "\n")
+      (insert "    " description "\n")
+      (seq-do
+       (lambda (arg)
+         (let* ((name (gethash 'name arg))
+                (is-selected (string-equal name selected-arg-name))
+                (description (gethash 'description arg))
+                (default-val (gethash 'default_value arg)))
+           (if is-selected
+               (insert "      " (propertize name 'font-lock-face 'font-lock-warning-face) ": " description)
+             (insert "      " name ": " description))))
+       arguments)
+      (insert "\n\n")
+      (save-excursion
+        (goto-char (point-min))
+        (while (re-search-forward "{{\\(.*?\\)}}" nil t)
+          (let ((match (match-string 1)))
+            (if (equal match selected-arg-name)
+                (replace-match (propertize match 'font-lock-face 'font-lock-warning-face))
+              (replace-match match)))))
+      (buffer-string))))
+
+(defvar-local warped--info-overlay nil)
+
+(defun warped--insert-info-string (action &optional selected-arg)
+  ""
+  (let ((info-str (warped--generate-info-string action selected-arg)))
+    (goto-char (point-max))
+    (forward-line 0)
+    (let ((start (point)))
+      (when warped--info-overlay
+        (delete-overlay warped--info-overlay))
+      (insert info-str)
+      (setq warped--info-overlay (make-overlay start (point)))
+      (overlay-put warped--info-overlay 'face 'highlight))))
+
+(insert (warped--generate-info-string "Push a tag to a remote git repository" 0))
+
+(warped--workspace-files)
+(warped--build-cache)
+(warped--workspace-list-tags)
+(warped--actions-from-tag "git")
 
 (provide 'warped)
 
