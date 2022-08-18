@@ -149,6 +149,50 @@ If provided, SELECTED-ARG is the index of the argument being edited."
       (overlay-put warped--info-overlay 'face 'highlight))))
 
 (defvar-local warped--input-overlay nil)
+(defvar-local warped--input-field-overlays nil)
+(defvar-local warped--next-command-clear-p nil)
+
+(defun warped--self-insert-command ()
+  ""
+  (interactive)
+  (let ((field-ov (seq-find (lambda (ov)
+                              (eql (overlay-get ov 'warped-type)
+                                   'warped-field))
+                            (overlays-at (if (eobp) (1- (point))
+                                           (point))))))
+    (when (and warped--next-command-clear-p
+               field-ov)
+      (let ((ov-start (overlay-start field-ov))
+            (ov-end (overlay-end field-ov)))
+        (kill-region ov-start ov-end)
+        (setq warped--next-command-clear-p nil)))
+    (self-insert-command 1)))
+
+(defconst warped--field-keymap
+  (let ((map (make-sparse-keymap)))
+    (define-key map [remap self-insert-command] #'warped--self-insert-command)
+    map))
+
+(defun warped--insert-command-with-overlays (command)
+  ""
+  (dolist (ov warped--input-field-overlays)
+    (delete-overlay ov))
+  (setq warped--input-field-overlays nil)
+  (insert command)
+  (beginning-of-line)
+  (while (re-search-forward "{{\\(.*?\\)}}" nil t)
+    (let* ((match (match-string 1))
+           (match-len (length match)))
+      (replace-match match)
+      (save-excursion
+        (forward-char (- match-len))
+        (let ((ov (make-overlay (point) (+ (point) match-len) nil nil t)))
+          (overlay-put ov 'face 'font-lock-warning-face)
+          ;; (overlay-put ov 'evaporate t)
+          (overlay-put ov 'warped-type 'warped-field)
+          (overlay-put ov 'keymap warped--field-keymap)
+          (push ov warped--input-field-overlays)))))
+  (setq warped--input-field-overlays (nreverse warped--input-field-overlays)))
 
 (defun warped--insert-template (action)
   ""
@@ -161,9 +205,9 @@ If provided, SELECTED-ARG is the index of the argument being edited."
           (end (save-excursion (goto-char (point-max)) (point))))
       (kill-region start end)
       (goto-char start)
-      (insert command)
+      (warped--insert-command-with-overlays command)
       (let ((ov (make-overlay start (point-max) nil nil t)))
-        (overlay-put ov 'face 'font-lock-warning-face)
+        ;; (overlay-put ov 'face 'font-lock-warning-face)
         (setq warped--input-overlay ov)))))
 
 (insert (warped--generate-info-string "Push a tag to a remote git repository" 0))
