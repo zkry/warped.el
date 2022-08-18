@@ -148,6 +148,24 @@ If provided, SELECTED-ARG is the index of the argument being edited."
       (setq warped--info-overlay (make-overlay start (point)))
       (overlay-put warped--info-overlay 'face 'highlight))))
 
+(defvar-local warped--input-overlay nil)
+
+(defun warped--insert-template (action)
+  ""
+  (when warped--input-overlay
+    (delete-overlay warped--input-overlay)
+    (setq warped--input-overlay nil))
+  (let* ((template-data (gethash action warped-spec-cache))
+         (command (gethash 'command template-data)))
+    (let ((start (save-excursion (goto-char (point-max)) (beginning-of-line) (point)))
+          (end (save-excursion (goto-char (point-max)) (point))))
+      (kill-region start end)
+      (goto-char start)
+      (insert command)
+      (let ((ov (make-overlay start (point-max) nil nil t)))
+        (overlay-put ov 'face 'font-lock-warning-face)
+        (setq warped--input-overlay ov)))))
+
 (insert (warped--generate-info-string "Push a tag to a remote git repository" 0))
 
 (warped--workspace-files)
