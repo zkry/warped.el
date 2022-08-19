@@ -171,7 +171,50 @@ If provided, SELECTED-ARG is the index of the argument being edited."
 (defconst warped--field-keymap
   (let ((map (make-sparse-keymap)))
     (define-key map [remap self-insert-command] #'warped--self-insert-command)
+    (define-key map (kbd "TAB") #'warped--next-field)
+    (define-key map (kbd "C-c C-c") #'warped--exit)
     map))
+
+(defun warped--current-field-idx ()
+  ""
+  (catch 'done
+    (let ((ovs (overlays-at (point))))
+      (dolist (ov ovs)
+        (when (overlay-get ov 'warped-field-idx)
+          (throw 'done (overlay-get ov 'warped-field-idx))))
+      nil)))
+
+(defun warped--goto-field (idx)
+  ""
+  (let ((ov-start (overlay-start (nth idx warped--input-field-overlays))))
+    (goto-char ov-start)))
+
+(defun warped--exit ()
+  ""
+  (interactive)
+  (when warped--next-command-clear-p
+    (setq warped--next-command-clear-p nil))
+  (when warped--input-field-overlays
+    (dolist (ov warped--input-field-overlays)
+      (delete-overlay ov)
+      (setq warped--input-field-overlays nil))
+    (setq warped--input-field-overlays nil))
+  (when warped--input-overlay
+    (delete-overlay warped--input-overlay)
+    (setq warped--input-overlay nil)))
+
+(defun warped--next-field ()
+  ""
+  (interactive)
+  (let ((bol-pos (line-beginning-position)))
+    (while (and (not (= (point) bol-pos))
+                (not (warped--current-field-idx)))
+      (forward-char -1))
+    (let ((field-idx (or (warped--current-field-idx) -1)))
+      (if field-idx
+          (let ((next-field (mod (1+ field-idx) (length warped--input-field-overlays))))
+            (warped--goto-field next-field)))))
+  (setq warped--next-command-clear-p t))
 
 (defun warped--insert-command-with-overlays (command)
   ""
@@ -180,18 +223,21 @@ If provided, SELECTED-ARG is the index of the argument being edited."
   (setq warped--input-field-overlays nil)
   (insert command)
   (beginning-of-line)
-  (while (re-search-forward "{{\\(.*?\\)}}" nil t)
-    (let* ((match (match-string 1))
-           (match-len (length match)))
-      (replace-match match)
-      (save-excursion
-        (forward-char (- match-len))
-        (let ((ov (make-overlay (point) (+ (point) match-len) nil nil t)))
-          (overlay-put ov 'face 'font-lock-warning-face)
-          ;; (overlay-put ov 'evaporate t)
-          (overlay-put ov 'warped-type 'warped-field)
-          (overlay-put ov 'keymap warped--field-keymap)
-          (push ov warped--input-field-overlays)))))
+  (let ((field-idx 0))
+    (while (re-search-forward "{{\\(.*?\\)}}" nil t)
+      (let* ((match (match-string 1))
+             (match-len (length match)))
+        (replace-match match)
+        (save-excursion
+          (forward-char (- match-len))
+          (let ((ov (make-overlay (point) (+ (point) match-len) nil nil t)))
+            (overlay-put ov 'face 'font-lock-warning-face)
+            ;; (overlay-put ov 'evaporate t)
+            (overlay-put ov 'warped-type 'warped-field)
+            (overlay-put ov 'warped-field-idx field-idx)
+            (overlay-put ov 'keymap warped--field-keymap)
+            (cl-incf field-idx)
+            (push ov warped--input-field-overlays))))))
   (setq warped--input-field-overlays (nreverse warped--input-field-overlays)))
 
 (defun warped--insert-template (action)
@@ -206,14 +252,26 @@ If provided, SELECTED-ARG is the index of the argument being edited."
       (kill-region start end)
       (goto-char start)
       (warped--insert-command-with-overlays command)
+      (goto-char start)
+      (warped--goto-field 0)
       (let ((ov (make-overlay start (point-max) nil nil t)))
         ;; (overlay-put ov 'face 'font-lock-warning-face)
-        (setq warped--input-overlay ov)))))
+        (setq warped--input-overlay ov))))
+  (setq warped--next-command-clear-p t))
 
 (insert (warped--generate-info-string "Push a tag to a remote git repository" 0))
 
+Push a tag to a remote git repository
+
+    git push origin tag_name
+
+    Pushes a single tag to a remote server
+      tag_name: The name of the tag that should be pushed to the remote git repository
+
+
+
 (warped--workspace-files)
-(warped--build-cache)
+; (warped--build-cache)
 (warped--workspace-list-tags)
 (warped--actions-from-tag "git")
 
