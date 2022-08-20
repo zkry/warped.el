@@ -168,6 +168,11 @@ If provided, SELECTED-ARG is the index of the argument being edited."
         (setq warped--next-command-clear-p nil)))
     (self-insert-command 1)))
 
+(defconst warped--input-keymap
+  (let ((map (make-sparse-keymap)))
+    (define-key map (kbd "TAB") #'warped--next-field)
+    map))
+
 (defconst warped--field-keymap
   (let ((map (make-sparse-keymap)))
     (define-key map [remap self-insert-command] #'warped--self-insert-command)
@@ -256,19 +261,19 @@ If provided, SELECTED-ARG is the index of the argument being edited."
       (warped--goto-field 0)
       (let ((ov (make-overlay start (point-max) nil nil t)))
         ;; (overlay-put ov 'face 'font-lock-warning-face)
+        (overlay-put ov 'keymap warped--input-keymap)
         (setq warped--input-overlay ov))))
   (setq warped--next-command-clear-p t))
 
+(defun warped-action ()
+  ""
+  (interactive)
+  (let* ((selected-tag (completing-read "select tag:" (warped--workspace-list-tags) nil t))
+         (selected-action (completing-read "select action:" (warped--actions-from-tag selected-tag))))
+    (warped--insert-info-string selected-action)
+    (warped--insert-template selected-action)))
+
 (insert (warped--generate-info-string "Push a tag to a remote git repository" 0))
-
-Push a tag to a remote git repository
-
-    git push origin tag_name
-
-    Pushes a single tag to a remote server
-      tag_name: The name of the tag that should be pushed to the remote git repository
-
-
 
 (warped--workspace-files)
 ; (warped--build-cache)
