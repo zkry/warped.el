@@ -3,7 +3,7 @@
 ;; Author: Zachary Romero
 ;; Maintainer: Zachary Romero
 ;; Version: 0.1.0
-;; Package-Requires: ((emacs "25.1"))
+;; Package-Requires: ((emacs "28.1"))
 ;; Homepage: https://github.com/zkry/warped.el
 ;; Keywords: keywords
 
@@ -108,12 +108,14 @@ If provided, SELECTED-ARG is the index of the argument being edited."
     (when selected-arg
       (setq selected-arg-name (gethash 'name (aref arguments selected-arg))))
     (with-temp-buffer
-      (insert "\n\n")
+      (insert "\n")
       (insert action "\n")
       (insert "\n")
       (insert "    " command "\n")
       (insert "\n")
-      (insert "    " description "\n")
+      (insert "    " description)
+      (fill-paragraph)
+      (insert "\n\n")
       (seq-do
        (lambda (arg)
          (let* ((name (gethash 'name arg))
@@ -122,7 +124,7 @@ If provided, SELECTED-ARG is the index of the argument being edited."
                 (default-val (gethash 'default_value arg)))
            (if is-selected
                (insert "      " (propertize name 'font-lock-face 'font-lock-warning-face) ": " description)
-             (insert "      " name ": " description))))
+             (insert "      " name ": " description "\n"))))
        arguments)
       (insert "\n\n")
       (save-excursion
@@ -132,6 +134,19 @@ If provided, SELECTED-ARG is the index of the argument being edited."
             (if (equal match selected-arg-name)
                 (replace-match (propertize match 'font-lock-face 'font-lock-warning-face))
               (replace-match match)))))
+      (goto-char (point-min))
+      (let ((max-line-len 0))
+        (while (not (eobp))
+          (end-of-line)
+          (when (> (current-column) max-line-len)
+            (setq max-line-len (current-column)))
+          (forward-line 1))
+        (goto-char (point-min))
+        (while (not (eobp))
+          (end-of-line)
+          (when (< (current-column) max-line-len)
+            (insert (make-string (- max-line-len (current-column)) ?\s)))
+          (forward-line 1)))
       (buffer-string))))
 
 (defvar-local warped--info-overlay nil)
@@ -171,6 +186,8 @@ If provided, SELECTED-ARG is the index of the argument being edited."
 (defconst warped--input-keymap
   (let ((map (make-sparse-keymap)))
     (define-key map (kbd "TAB") #'warped--next-field)
+    (define-key map (kbd "C-c C-c") #'warped--exit)
+    (define-key map (kbd "C-c C-q") #'warped--exit)
     map))
 
 (defconst warped--field-keymap
@@ -178,6 +195,7 @@ If provided, SELECTED-ARG is the index of the argument being edited."
     (define-key map [remap self-insert-command] #'warped--self-insert-command)
     (define-key map (kbd "TAB") #'warped--next-field)
     (define-key map (kbd "C-c C-c") #'warped--exit)
+    (define-key map (kbd "C-c C-q") #'warped--exit)
     map))
 
 (defun warped--current-field-idx ()
@@ -197,6 +215,12 @@ If provided, SELECTED-ARG is the index of the argument being edited."
 (defun warped--exit ()
   ""
   (interactive)
+  (when warped--info-overlay
+    (let ((ov-start (overlay-start warped--info-overlay))
+          (ov-end (overlay-end warped--info-overlay)))
+      (delete-overlay warped--info-overlay)
+      (setq warped--info-overlay nil)
+      (kill-region ov-start ov-end)))
   (when warped--next-command-clear-p
     (setq warped--next-command-clear-p nil))
   (when warped--input-field-overlays
@@ -211,15 +235,17 @@ If provided, SELECTED-ARG is the index of the argument being edited."
 (defun warped--next-field ()
   ""
   (interactive)
-  (let ((bol-pos (line-beginning-position)))
-    (while (and (not (= (point) bol-pos))
-                (not (warped--current-field-idx)))
-      (forward-char -1))
-    (let ((field-idx (or (warped--current-field-idx) -1)))
-      (if field-idx
-          (let ((next-field (mod (1+ field-idx) (length warped--input-field-overlays))))
-            (warped--goto-field next-field)))))
-  (setq warped--next-command-clear-p t))
+  (if (> (length warped--input-field-overlays) 0)
+      (let ((bol-pos (line-beginning-position)))
+        (while (and (not (= (point) bol-pos))
+                    (not (warped--current-field-idx)))
+          (forward-char -1))
+        (let ((field-idx (or (warped--current-field-idx) -1)))
+          (if field-idx
+              (let ((next-field (mod (1+ field-idx) (length warped--input-field-overlays))))
+                (warped--goto-field next-field))))
+        (setq warped--next-command-clear-p t))
+    (beep)))
 
 (defun warped--insert-command-with-overlays (command)
   ""
@@ -258,27 +284,45 @@ If provided, SELECTED-ARG is the index of the argument being edited."
       (goto-char start)
       (warped--insert-command-with-overlays command)
       (goto-char start)
-      (warped--goto-field 0)
+      (when (> (length warped--input-field-overlays) 0)
+        (warped--goto-field 0))
       (let ((ov (make-overlay start (point-max) nil nil t)))
         ;; (overlay-put ov 'face 'font-lock-warning-face)
         (overlay-put ov 'keymap warped--input-keymap)
         (setq warped--input-overlay ov))))
   (setq warped--next-command-clear-p t))
 
+(defun warped--ensure-cache ()
+  ""
+  (unless warped-spec-cache
+    (warped--build-cache)))
+
+(defun warped--annotation (arg)
+  ""
+  (let ((data (gethash arg warped-spec-cache)))
+    nil))
+
+(defun warped--select-action ()
+  ""
+  (warped--ensure-cache)
+  (let* ((sep " >> ")
+         (completion-extra-properties '(:annotation-function warped--annotation))
+         (names (seq-map (lambda (name)
+                           (let ((cmd (string-replace "\n" "; " (gethash 'command (gethash name warped-spec-cache)))))
+                             (concat name
+                                     (propertize sep 'face 'shadow)
+                                     (propertize cmd 'face 'font-lock-comment-face))))
+                         (hash-table-keys warped-spec-cache))))
+    (car (split-string (completing-read "Action:" names nil t) " >> "))))
+
 (defun warped-action ()
   ""
   (interactive)
-  (let* ((selected-tag (completing-read "select tag:" (warped--workspace-list-tags) nil t))
-         (selected-action (completing-read "select action:" (warped--actions-from-tag selected-tag))))
+  (let* ((selected-action (warped--select-action))
+         (inhibit-read-only t))
     (warped--insert-info-string selected-action)
     (warped--insert-template selected-action)))
 
-(insert (warped--generate-info-string "Push a tag to a remote git repository" 0))
-
-(warped--workspace-files)
-; (warped--build-cache)
-(warped--workspace-list-tags)
-(warped--actions-from-tag "git")
 
 (provide 'warped)
 
