@@ -316,7 +316,7 @@ If provided, SELECTED-ARG is the index of the argument being edited."
     (car (split-string (completing-read "Action:" names nil t) " >> "))))
 
 (defun warped-action ()
-  ""
+  "Select and perform a warped action."
   (interactive)
   (let* ((selected-action (warped--select-action))
          (inhibit-read-only t))
